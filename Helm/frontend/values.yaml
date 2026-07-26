@@ -1,0 +1,11 @@
+replicaCount: 1
+
+image:
+  repository: 842746302447.dkr.ecr.ap-south-1.amazonaws.com/three-tier-poc-frontend
+  tag: v2
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 80

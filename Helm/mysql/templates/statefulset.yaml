@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "mysql.fullname" . }}
+  namespace: database
+  labels:
+    {{- include "mysql.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "mysql.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "mysql.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mysql.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: mysql
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          ports:
+            - containerPort: 3306
+              name: mysql
+          envFrom:
+            - secretRef:
+                name: mysql-secret
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$(MYSQL_ROOT_PASSWORD)"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$(MYSQL_ROOT_PASSWORD)"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.storage.storageClassName }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.size }}

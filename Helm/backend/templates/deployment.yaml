@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: backend
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.targetPort }}
+          env:
+            - name: DB_HOST
+              value: {{ .Values.db.host | quote }}
+            - name: DB_PORT
+              value: {{ .Values.db.port | quote }}
+            - name: DB_DATABASE
+              value: {{ .Values.db.name | quote }}
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: backend-db-secret
+                  key: DB_USER
+            - name: DB_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: backend-db-secret
+                  key: DB_PWD
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10

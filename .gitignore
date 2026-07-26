@@ -1,0 +1,16 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfstate.backup*
+.terraform.lock.hcl
+
+# Secrets — never commit real credentials
+**/secrets.values.yaml
+
+# Node
+**/node_modules/
+
+# OS/editor junk
+.DS_Store
+Thumbs.db

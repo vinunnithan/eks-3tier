@@ -1,0 +1,16 @@
+replicaCount: 1
+
+image:
+  repository: 842746302447.dkr.ecr.ap-south-1.amazonaws.com/three-tier-poc-backend
+  tag: test
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 4000   # update once confirmed from index.js
+
+db:
+  host: mysql.database.svc.cluster.local
+  port: 3306
+  name: transactions
