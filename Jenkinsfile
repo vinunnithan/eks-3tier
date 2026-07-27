@@ -7,13 +7,9 @@ pipeline {
         CLUSTER      = 'three-tier-poc-cluster'
     }
 
-    triggers {
-        pollSCM('H/5 * * * *')
-    }
-
     stages {
         stage('Checkout') {
-            steps {
+            steps {git 
                 checkout scm
                 script {
                     env.IMAGE_TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()

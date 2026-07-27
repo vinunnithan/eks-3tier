@@ -1,5 +1,5 @@
 # Use a slim, specific Node version — matches your original AWS PoC's Node runtime expectations
-FROM node:18-alpine
+FROM node:22-alpine
 
 # Set working directory inside the container
 WORKDIR /app
