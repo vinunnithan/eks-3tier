@@ -22,15 +22,24 @@ pipeline {
         }
 
         stage('Detect changes') {
-            steps {
-                script {
-                    def changes = sh(script: 'git diff --name-only HEAD~1 HEAD || true', returnStdout: true).trim()
-                    env.BACKEND_CHANGED  = changes.contains('application-code/app-tier') ? 'true' : 'false'
-                    env.FRONTEND_CHANGED = changes.contains('application-code/web-tier') ? 'true' : 'false'
-                    echo "Backend changed: ${env.BACKEND_CHANGED}, Frontend changed: ${env.FRONTEND_CHANGED}"
-                }
+    steps {
+        script {
+            def isFirstBuild = sh(script: 'git rev-parse HEAD~1', returnStatus: true) != 0
+
+            if (isFirstBuild) {
+                echo "No previous commit found — building everything."
+                env.BACKEND_CHANGED  = 'true'
+                env.FRONTEND_CHANGED = 'true'
+            } else {
+                def changes = sh(script: 'git diff --name-only HEAD~1 HEAD', returnStdout: true).trim()
+                env.BACKEND_CHANGED  = changes.contains('application-code/app-tier') ? 'true' : 'false'
+                env.FRONTEND_CHANGED = changes.contains('application-code/web-tier') ? 'true' : 'false'
             }
+
+            echo "Backend changed: ${env.BACKEND_CHANGED}, Frontend changed: ${env.FRONTEND_CHANGED}"
         }
+    }
+}
 
         stage('Configure kubeconfig') {
             when {
@@ -94,7 +103,7 @@ pipeline {
                 """
                 dir('Helm') {
                     sh """
-                        helm upgrade --install backend ./backend -n backend -f backend/secrets.values.yaml --set image.tag=$IMAGE_TAG
+                        helm upgrade --install backend ./backend -n backend -f /var/lib/jenkins/secrets/backend-secrets.values.yaml --set image.tag=$IMAGE_TAG
                         kubectl rollout status deployment/backend -n backend --timeout=90s
                     """
                 }
