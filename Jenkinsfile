@@ -4,10 +4,11 @@ pipeline {
     environment {
         AWS_REGION   = 'ap-south-1'
         ECR_REGISTRY = '842746302447.dkr.ecr.ap-south-1.amazonaws.com'
+        CLUSTER      = 'three-tier-poc-cluster'
     }
 
     triggers {
-        pollSCM('H/5 * * * *')  // check for new commits every 5 minutes
+        pollSCM('H/5 * * * *')
     }
 
     stages {
@@ -15,7 +16,7 @@ pipeline {
             steps {
                 checkout scm
                 script {
-                    env.IMAGE_TAG = powershell(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    env.IMAGE_TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                 }
             }
         }
@@ -23,7 +24,7 @@ pipeline {
         stage('Detect changes') {
             steps {
                 script {
-                    def changes = powershell(script: 'git diff --name-only HEAD~1 HEAD', returnStdout: true).trim()
+                    def changes = sh(script: 'git diff --name-only HEAD~1 HEAD || true', returnStdout: true).trim()
                     env.BACKEND_CHANGED  = changes.contains('application-code/app-tier') ? 'true' : 'false'
                     env.FRONTEND_CHANGED = changes.contains('application-code/web-tier') ? 'true' : 'false'
                     echo "Backend changed: ${env.BACKEND_CHANGED}, Frontend changed: ${env.FRONTEND_CHANGED}"
@@ -31,53 +32,130 @@ pipeline {
             }
         }
 
-        stage('Backend: Build & Push') {
+        stage('Configure kubeconfig') {
+            when {
+                anyOf {
+                    environment name: 'BACKEND_CHANGED', value: 'true'
+                    environment name: 'FRONTEND_CHANGED', value: 'true'
+                }
+            }
+            steps {
+                sh '''
+                    aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER
+                    kubectl get nodes
+                '''
+            }
+        }
+
+        stage('ECR Login') {
+            when {
+                anyOf {
+                    environment name: 'BACKEND_CHANGED', value: 'true'
+                    environment name: 'FRONTEND_CHANGED', value: 'true'
+                }
+            }
+            steps {
+                sh 'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY'
+            }
+        }
+
+        // ---------------- BACKEND ----------------
+
+        stage('Backend: Build Image') {
             when { environment name: 'BACKEND_CHANGED', value: 'true' }
             steps {
                 dir('aws_3tier_architecture/application-code/app-tier') {
-                    powershell """
-                        docker build -t backend:$env:IMAGE_TAG .
-                        docker tag backend:$env:IMAGE_TAG $env:ECR_REGISTRY/three-tier-poc-backend:$env:IMAGE_TAG
-                        docker push $env:ECR_REGISTRY/three-tier-poc-backend:$env:IMAGE_TAG
-                    """
+                    sh 'docker build -t backend:$IMAGE_TAG .'
                 }
             }
         }
 
-        stage('Backend: Deploy') {
+        stage('Backend: Trivy Scan') {
             when { environment name: 'BACKEND_CHANGED', value: 'true' }
             steps {
+                sh '''
+                    export TRIVY_CACHE_DIR=/var/lib/jenkins/trivy-cache
+                    mkdir -p $TRIVY_CACHE_DIR
+                    trivy image \
+                      --cache-dir $TRIVY_CACHE_DIR \
+                      --exit-code 1 \
+                      --severity HIGH,CRITICAL \
+                      backend:$IMAGE_TAG
+                '''
+            }
+        }
+
+        stage('Backend: Push & Deploy') {
+            when { environment name: 'BACKEND_CHANGED', value: 'true' }
+            steps {
+                sh """
+                    docker tag backend:$IMAGE_TAG $ECR_REGISTRY/three-tier-poc-backend:$IMAGE_TAG
+                    docker push $ECR_REGISTRY/three-tier-poc-backend:$IMAGE_TAG
+                """
                 dir('Helm') {
-                    powershell """
-                        helm upgrade backend ./backend -n backend -f backend\\secrets.values.yaml --set image.tag=$env:IMAGE_TAG
+                    sh """
+                        helm upgrade --install backend ./backend -n backend -f backend/secrets.values.yaml --set image.tag=$IMAGE_TAG
                         kubectl rollout status deployment/backend -n backend --timeout=90s
                     """
                 }
             }
         }
 
-        stage('Frontend: Build & Push') {
+        // ---------------- FRONTEND ----------------
+
+        stage('Frontend: Build Image') {
             when { environment name: 'FRONTEND_CHANGED', value: 'true' }
             steps {
                 dir('aws_3tier_architecture/application-code/web-tier') {
-                    powershell """
-                        docker build -t frontend:$env:IMAGE_TAG .
-                        docker tag frontend:$env:IMAGE_TAG $env:ECR_REGISTRY/three-tier-poc-frontend:$env:IMAGE_TAG
-                        docker push $env:ECR_REGISTRY/three-tier-poc-frontend:$env:IMAGE_TAG
+                    sh 'docker build -t frontend:$IMAGE_TAG .'
+                }
+            }
+        }
+
+        stage('Frontend: Trivy Scan') {
+            when { environment name: 'FRONTEND_CHANGED', value: 'true' }
+            steps {
+                sh '''
+                    export TRIVY_CACHE_DIR=/var/lib/jenkins/trivy-cache
+                    mkdir -p $TRIVY_CACHE_DIR
+                    trivy image \
+                      --cache-dir $TRIVY_CACHE_DIR \
+                      --exit-code 1 \
+                      --severity HIGH,CRITICAL \
+                      frontend:$IMAGE_TAG
+                '''
+            }
+        }
+
+        stage('Frontend: Push & Deploy') {
+            when { environment name: 'FRONTEND_CHANGED', value: 'true' }
+            steps {
+                sh """
+                    docker tag frontend:$IMAGE_TAG $ECR_REGISTRY/three-tier-poc-frontend:$IMAGE_TAG
+                    docker push $ECR_REGISTRY/three-tier-poc-frontend:$IMAGE_TAG
+                """
+                dir('Helm') {
+                    sh """
+                        helm upgrade --install frontend ./frontend -n frontend --set image.tag=$IMAGE_TAG
+                        kubectl rollout status deployment/frontend -n frontend --timeout=90s
                     """
                 }
             }
         }
 
-        stage('Frontend: Deploy') {
-            when { environment name: 'FRONTEND_CHANGED', value: 'true' }
-            steps {
-                dir('Helm') {
-                    powershell """
-                        helm upgrade frontend ./frontend -n frontend --set image.tag=$env:IMAGE_TAG
-                        kubectl rollout status deployment/frontend -n frontend --timeout=90s
-                    """
+        stage('Verify Deployment') {
+            when {
+                anyOf {
+                    environment name: 'BACKEND_CHANGED', value: 'true'
+                    environment name: 'FRONTEND_CHANGED', value: 'true'
                 }
+            }
+            steps {
+                sh '''
+                    kubectl get pods -n backend
+                    kubectl get pods -n frontend
+                    kubectl get ingress -n frontend
+                '''
             }
         }
     }
