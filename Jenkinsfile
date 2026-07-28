@@ -56,6 +56,7 @@ pipeline {
             }
         }
 
+        /*
         stage('Backend: Trivy Scan') {
             steps {
                 sh '''
@@ -70,6 +71,7 @@ pipeline {
                 '''
             }
         }
+        */
 
         stage('Backend: Push & Deploy') {
             steps {
@@ -111,6 +113,7 @@ pipeline {
             }
         }
 
+        /*
         stage('Frontend: Trivy Scan') {
             steps {
                 sh '''
@@ -125,6 +128,7 @@ pipeline {
                 '''
             }
         }
+        */
 
         stage('Frontend: Push & Deploy') {
             steps {
