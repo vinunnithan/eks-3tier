@@ -9,7 +9,7 @@ pipeline {
 
     stages {
         stage('Checkout') {
-            steps {git 
+            steps {
                 checkout scm
                 script {
                     env.IMAGE_TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
