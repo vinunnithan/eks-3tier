@@ -279,6 +279,35 @@ resource "aws_iam_role_policy_attachment" "alb_controller_attach" {
 # ============================================================
 # KUBERNETES NAMESPACES
 # ============================================================
+# ============================================================
+# JENKINS EC2 — EKS ACCESS (auto-reapplied every time cluster is recreated)
+# ============================================================
+
+variable "jenkins_ec2_role_arn" {
+  description = "IAM Role ARN attached to the Jenkins EC2 instance"
+  type        = string
+  default     = "arn:aws:iam::842746302447:role/ssm-manager-policy"
+}
+
+resource "aws_eks_access_entry" "jenkins" {
+  cluster_name  = module.eks.cluster_name
+  principal_arn = var.jenkins_ec2_role_arn
+  type          = "STANDARD"
+
+  depends_on = [module.eks]
+}
+
+resource "aws_eks_access_policy_association" "jenkins_admin" {
+  cluster_name  = module.eks.cluster_name
+  principal_arn = var.jenkins_ec2_role_arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.jenkins]
+}
 
 resource "kubernetes_namespace" "frontend" {
   metadata {
