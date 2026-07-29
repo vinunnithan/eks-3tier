@@ -5,47 +5,84 @@ metadata:
   namespace: database
   labels:
     {{- include "mysql.labels" . | nindent 4 }}
+
 spec:
   serviceName: {{ include "mysql.fullname" . }}
   replicas: 1
+
   selector:
     matchLabels:
       {{- include "mysql.selectorLabels" . | nindent 6 }}
+
   template:
     metadata:
       labels:
         {{- include "mysql.selectorLabels" . | nindent 8 }}
+
     spec:
       containers:
         - name: mysql
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+
           ports:
-            - containerPort: 3306
-              name: mysql
+            - name: mysql
+              containerPort: 3306
+
           envFrom:
             - secretRef:
                 name: mysql-secret
+
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+
           volumeMounts:
             - name: data
               mountPath: /var/lib/mysql
+
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+
           readinessProbe:
             exec:
-              command: ["mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$(MYSQL_ROOT_PASSWORD)"]
+              command:
+                - mysqladmin
+                - ping
+                - "-h"
+                - localhost
+                - "-u"
+                - root
+                - "-p$(MYSQL_ROOT_PASSWORD)"
             initialDelaySeconds: 20
             periodSeconds: 10
+
           livenessProbe:
             exec:
-              command: ["mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$(MYSQL_ROOT_PASSWORD)"]
+              command:
+                - mysqladmin
+                - ping
+                - "-h"
+                - localhost
+                - "-u"
+                - root
+                - "-p$(MYSQL_ROOT_PASSWORD)"
             initialDelaySeconds: 30
             periodSeconds: 20
+
+      volumes:
+        - name: initdb
+          configMap:
+            name: mysql-initdb
+
   volumeClaimTemplates:
     - metadata:
         name: data
+
       spec:
-        accessModes: ["ReadWriteOnce"]
+        accessModes:
+          - ReadWriteOnce
+
         storageClassName: {{ .Values.storage.storageClassName }}
+
         resources:
           requests:
             storage: {{ .Values.storage.size }}
