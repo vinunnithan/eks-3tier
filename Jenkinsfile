@@ -33,6 +33,26 @@ pipeline {
             }
         }
 
+        // ===========================
+        // MySQL
+        // ===========================
+
+        stage('MySQL: Deploy') {
+            steps {
+                dir('Helm') {
+                    sh """
+                        helm upgrade --install mysql ./mysql \
+                            -n database \
+                            -f /var/lib/jenkins/secrets/mysql-secrets.values.yaml
+
+                        kubectl rollout status statefulset/mysql \
+                            -n database \
+                            --timeout=120s
+                    """
+                }
+            }
+        }
+
         stage('ECR Login') {
             steps {
                 sh '''
@@ -56,7 +76,6 @@ pipeline {
             }
         }
 
-        
         stage('Backend: Trivy Scan') {
             steps {
                 sh '''
@@ -112,7 +131,6 @@ pipeline {
             }
         }
 
-        
         stage('Frontend: Trivy Scan') {
             steps {
                 sh '''
@@ -127,7 +145,6 @@ pipeline {
                 '''
             }
         }
-        
 
         stage('Frontend: Push & Deploy') {
             steps {
@@ -157,6 +174,10 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 sh '''
+                    echo "========== MySQL Pod =========="
+                    kubectl get pods -n database
+
+                    echo ""
                     echo "========== Backend Pods =========="
                     kubectl get pods -n backend
 
