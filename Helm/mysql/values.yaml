@@ -1,4 +1,4 @@
-# redeploy trigger
+# redeploy triggers
 image:
   repository: mysql
   tag: "8.0"
