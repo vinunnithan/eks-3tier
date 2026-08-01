@@ -1,4 +1,4 @@
-// trigger pipeline test
+// trigger pipeline tests
 const transactionService = require('./TransactionService');
 const express = require('express');
 const bodyParser = require('body-parser');
