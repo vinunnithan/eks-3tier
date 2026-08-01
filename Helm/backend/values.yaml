@@ -1,4 +1,3 @@
-#redeploy triggers
 replicaCount: 1
 
 image:

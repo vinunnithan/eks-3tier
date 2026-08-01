@@ -21,36 +21,48 @@ pipeline {
             }
         }
 
-        stage('Detect changes') {
+        stage('Detect Changes') {
             steps {
                 script {
-                    def isFirstBuild = sh(script: 'git rev-parse HEAD~1', returnStatus: true) != 0
 
-                    if (isFirstBuild) {
-                        echo "No previous commit found — building everything."
-                        env.BACKEND_CHANGED  = 'true'
-                        env.FRONTEND_CHANGED = 'true'
-                        env.MYSQL_CHANGED    = 'true'
+                    def firstBuild = sh(
+                        script: 'git rev-parse HEAD~1 >/dev/null 2>&1',
+                        returnStatus: true
+                    ) != 0
+
+                    if (firstBuild) {
+
+                        env.BACKEND_CHANGED  = "true"
+                        env.FRONTEND_CHANGED = "true"
+                        env.MYSQL_CHANGED    = "true"
+
                     } else {
-                        def changes = sh(script: 'git diff --name-only HEAD~1 HEAD', returnStdout: true).trim()
-                        env.BACKEND_CHANGED  = changes.contains('application-code/app-tier') ? 'true' : 'false'
-                        env.FRONTEND_CHANGED = changes.contains('application-code/web-tier') ? 'true' : 'false'
-                        env.MYSQL_CHANGED    = changes.contains('Helm/mysql') ? 'true' : 'false'
+
+                        def changes = sh(
+                            script: 'git diff --name-only HEAD~1 HEAD',
+                            returnStdout: true
+                        ).trim()
+
+                        env.BACKEND_CHANGED =
+                            changes.contains("aws_3tier_architecture/application-code/app-tier") ||
+                            changes.contains("Helm/backend")
+
+                        env.FRONTEND_CHANGED =
+                            changes.contains("aws_3tier_architecture/application-code/web-tier") ||
+                            changes.contains("Helm/frontend")
+
+                        env.MYSQL_CHANGED =
+                            changes.contains("Helm/mysql")
                     }
 
-                    echo "Backend: ${env.BACKEND_CHANGED}, Frontend: ${env.FRONTEND_CHANGED}, MySQL: ${env.MYSQL_CHANGED}"
+                    echo "Backend Changed : ${env.BACKEND_CHANGED}"
+                    echo "Frontend Changed: ${env.FRONTEND_CHANGED}"
+                    echo "MySQL Changed   : ${env.MYSQL_CHANGED}"
                 }
             }
         }
 
         stage('Configure kubeconfig') {
-            when {
-                anyOf {
-                    environment name: 'BACKEND_CHANGED', value: 'true'
-                    environment name: 'FRONTEND_CHANGED', value: 'true'
-                    environment name: 'MYSQL_CHANGED', value: 'true'
-                }
-            }
             steps {
                 sh '''
                     aws eks update-kubeconfig \
@@ -59,27 +71,6 @@ pipeline {
 
                     kubectl get nodes
                 '''
-            }
-        }
-
-        // ===========================
-        // MySQL
-        // ===========================
-
-        stage('MySQL: Deploy') {
-            when { environment name: 'MYSQL_CHANGED', value: 'true' }
-            steps {
-                dir('Helm') {
-                    sh """
-                        helm upgrade --install mysql ./mysql \
-                            -n database \
-                            -f /var/lib/jenkins/secrets/mysql-secrets.values.yaml
-
-                        kubectl rollout status statefulset/mysql \
-                            -n database \
-                            --timeout=120s
-                    """
-                }
             }
         }
 
@@ -92,45 +83,89 @@ pipeline {
             }
             steps {
                 sh '''
-                    aws ecr get-login-password --region $AWS_REGION | \
-                    docker login --username AWS --password-stdin $ECR_REGISTRY
+                    aws ecr get-login-password \
+                    --region $AWS_REGION | \
+                    docker login \
+                    --username AWS \
+                    --password-stdin $ECR_REGISTRY
                 '''
             }
         }
 
-        // ===========================
-        // Backend
-        // ===========================
+        //==================================================
+        // MYSQL
+        //==================================================
 
-        stage('Backend: Build Image') {
-            when { environment name: 'BACKEND_CHANGED', value: 'true' }
+        stage('Deploy MySQL') {
             steps {
-                dir('aws_3tier_architecture/application-code/app-tier') {
+
+                dir('Helm') {
+
+                    sh """
+                        helm upgrade --install mysql ./mysql \
+                        -n database \
+                        -f /var/lib/jenkins/secrets/mysql-secrets.values.yaml
+                    """
+
                     sh '''
-                        docker build -t backend:$IMAGE_TAG .
+                        kubectl rollout status statefulset/mysql \
+                        -n database \
+                        --timeout=180s
                     '''
                 }
             }
         }
 
-        stage('Backend: Trivy Scan') {
-            when { environment name: 'BACKEND_CHANGED', value: 'true' }
+        //==================================================
+        // BACKEND BUILD
+        //==================================================
+
+        stage('Build Backend Image') {
+
+            when {
+                environment name: 'BACKEND_CHANGED', value: 'true'
+            }
+
             steps {
+
+                dir('aws_3tier_architecture/application-code/app-tier') {
+
+                    sh '''
+                        docker build \
+                        -t backend:$IMAGE_TAG .
+                    '''
+                }
+            }
+        }
+
+        stage('Scan Backend') {
+
+            when {
+                environment name: 'BACKEND_CHANGED', value: 'true'
+            }
+
+            steps {
+
                 sh '''
                     export TRIVY_CACHE_DIR=/var/lib/jenkins/trivy-cache
+
                     mkdir -p $TRIVY_CACHE_DIR
 
                     trivy image \
-                      --cache-dir $TRIVY_CACHE_DIR \
-                      --severity HIGH,CRITICAL \
-                      --exit-code 0 \
-                      backend:$IMAGE_TAG
+                    --cache-dir $TRIVY_CACHE_DIR \
+                    --severity HIGH,CRITICAL \
+                    --exit-code 0 \
+                    backend:$IMAGE_TAG
                 '''
             }
         }
 
-        stage('Backend: Push & Deploy') {
-            when { environment name: 'BACKEND_CHANGED', value: 'true' }
+        stage('Push Backend Image') {
+
+            when {
+                environment name: 'BACKEND_CHANGED', value: 'true'
+            }
+
             steps {
 
                 sh """
@@ -140,55 +175,100 @@ pipeline {
                     docker push \
                     $ECR_REGISTRY/three-tier-poc-backend:$IMAGE_TAG
                 """
-
-                dir('Helm') {
-                    sh """
-                        helm upgrade --install backend ./backend \
-                            -n backend \
-                            -f /var/lib/jenkins/secrets/backend-secrets.values.yaml \
-                            --set image.tag=$IMAGE_TAG
-
-                        kubectl rollout status deployment/backend \
-                            -n backend \
-                            --timeout=90s
-                    """
-                }
             }
         }
 
-        // ===========================
-        // Frontend
-        // ===========================
+        //==================================================
+        // DEPLOY BACKEND (ALWAYS)
+        //==================================================
 
-        stage('Frontend: Build Image') {
-            when { environment name: 'FRONTEND_CHANGED', value: 'true' }
+        stage('Deploy Backend') {
+
             steps {
-                dir('aws_3tier_architecture/application-code/web-tier') {
+
+                dir('Helm') {
+
+                    script {
+
+                        def imageTag = env.BACKEND_CHANGED == "true" ?
+                                env.IMAGE_TAG :
+                                sh(
+                                    script: """
+                                    kubectl get deployment backend \
+                                    -n backend \
+                                    -o=jsonpath='{.spec.template.spec.containers[0].image}' \
+                                    | awk -F: '{print \$NF}'
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+
+                        sh """
+                            helm upgrade --install backend ./backend \
+                            -n backend \
+                            -f /var/lib/jenkins/secrets/backend-secrets.values.yaml \
+                            --set image.tag=${imageTag}
+                        """
+                    }
+
                     sh '''
-                        docker build -t frontend:$IMAGE_TAG .
+                        kubectl rollout status deployment/backend \
+                        -n backend \
+                        --timeout=180s
                     '''
                 }
             }
         }
 
-        stage('Frontend: Trivy Scan') {
-            when { environment name: 'FRONTEND_CHANGED', value: 'true' }
+        //==================================================
+        // FRONTEND BUILD
+        //==================================================
+
+        stage('Build Frontend Image') {
+
+            when {
+                environment name: 'FRONTEND_CHANGED', value: 'true'
+            }
+
             steps {
+
+                dir('aws_3tier_architecture/application-code/web-tier') {
+
+                    sh '''
+                        docker build \
+                        -t frontend:$IMAGE_TAG .
+                    '''
+                }
+            }
+        }
+
+        stage('Scan Frontend') {
+
+            when {
+                environment name: 'FRONTEND_CHANGED', value: 'true'
+            }
+
+            steps {
+
                 sh '''
                     export TRIVY_CACHE_DIR=/var/lib/jenkins/trivy-cache
+
                     mkdir -p $TRIVY_CACHE_DIR
 
                     trivy image \
-                      --cache-dir $TRIVY_CACHE_DIR \
-                      --severity HIGH,CRITICAL \
-                      --exit-code 0 \
-                      frontend:$IMAGE_TAG
+                    --cache-dir $TRIVY_CACHE_DIR \
+                    --severity HIGH,CRITICAL \
+                    --exit-code 0 \
+                    frontend:$IMAGE_TAG
                 '''
             }
         }
 
-        stage('Frontend: Push & Deploy') {
-            when { environment name: 'FRONTEND_CHANGED', value: 'true' }
+        stage('Push Frontend Image') {
+
+            when {
+                environment name: 'FRONTEND_CHANGED', value: 'true'
+            }
+
             steps {
 
                 sh """
@@ -198,45 +278,69 @@ pipeline {
                     docker push \
                     $ECR_REGISTRY/three-tier-poc-frontend:$IMAGE_TAG
                 """
+            }
+        }
+
+        //==================================================
+        // DEPLOY FRONTEND (ALWAYS)
+        //==================================================
+
+        stage('Deploy Frontend') {
+
+            steps {
 
                 dir('Helm') {
-                    sh """
-                        helm upgrade --install frontend ./frontend \
-                            -n frontend \
-                            --set image.tag=$IMAGE_TAG
 
-                        kubectl rollout status deployment/frontend \
+                    script {
+
+                        def imageTag = env.FRONTEND_CHANGED == "true" ?
+                                env.IMAGE_TAG :
+                                sh(
+                                    script: """
+                                    kubectl get deployment frontend \
+                                    -n frontend \
+                                    -o=jsonpath='{.spec.template.spec.containers[0].image}' \
+                                    | awk -F: '{print \$NF}'
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+
+                        sh """
+                            helm upgrade --install frontend ./frontend \
                             -n frontend \
-                            --timeout=90s
-                    """
+                            --set image.tag=${imageTag}
+                        """
+                    }
+
+                    sh '''
+                        kubectl rollout status deployment/frontend \
+                        -n frontend \
+                        --timeout=180s
+                    '''
                 }
             }
         }
 
-        stage('Verify Deployment') {
-            when {
-                anyOf {
-                    environment name: 'BACKEND_CHANGED', value: 'true'
-                    environment name: 'FRONTEND_CHANGED', value: 'true'
-                    environment name: 'MYSQL_CHANGED', value: 'true'
-                }
-            }
+        //==================================================
+        // VERIFY
+        //==================================================
+
+        stage('Verify') {
+
             steps {
+
                 sh '''
-                    echo "========== MySQL Pod =========="
-                    kubectl get pods -n database
+                    echo "=========================="
+
+                    kubectl get pods -A
 
                     echo ""
-                    echo "========== Backend Pods =========="
-                    kubectl get pods -n backend
+
+                    kubectl get svc -A
 
                     echo ""
-                    echo "========== Frontend Pods =========="
-                    kubectl get pods -n frontend
 
-                    echo ""
-                    echo "========== Ingress =========="
-                    kubectl get ingress -n frontend
+                    kubectl get ingress -A
                 '''
             }
         }
@@ -249,7 +353,7 @@ pipeline {
         }
 
         failure {
-            echo 'Pipeline failed. Check the logs above.'
+            echo 'Pipeline failed.'
         }
 
         always {
