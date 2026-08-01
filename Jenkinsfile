@@ -21,7 +21,36 @@ pipeline {
             }
         }
 
+        stage('Detect changes') {
+            steps {
+                script {
+                    def isFirstBuild = sh(script: 'git rev-parse HEAD~1', returnStatus: true) != 0
+
+                    if (isFirstBuild) {
+                        echo "No previous commit found — building everything."
+                        env.BACKEND_CHANGED  = 'true'
+                        env.FRONTEND_CHANGED = 'true'
+                        env.MYSQL_CHANGED    = 'true'
+                    } else {
+                        def changes = sh(script: 'git diff --name-only HEAD~1 HEAD', returnStdout: true).trim()
+                        env.BACKEND_CHANGED  = changes.contains('application-code/app-tier') ? 'true' : 'false'
+                        env.FRONTEND_CHANGED = changes.contains('application-code/web-tier') ? 'true' : 'false'
+                        env.MYSQL_CHANGED    = changes.contains('Helm/mysql') ? 'true' : 'false'
+                    }
+
+                    echo "Backend: ${env.BACKEND_CHANGED}, Frontend: ${env.FRONTEND_CHANGED}, MySQL: ${env.MYSQL_CHANGED}"
+                }
+            }
+        }
+
         stage('Configure kubeconfig') {
+            when {
+                anyOf {
+                    environment name: 'BACKEND_CHANGED', value: 'true'
+                    environment name: 'FRONTEND_CHANGED', value: 'true'
+                    environment name: 'MYSQL_CHANGED', value: 'true'
+                }
+            }
             steps {
                 sh '''
                     aws eks update-kubeconfig \
@@ -38,6 +67,7 @@ pipeline {
         // ===========================
 
         stage('MySQL: Deploy') {
+            when { environment name: 'MYSQL_CHANGED', value: 'true' }
             steps {
                 dir('Helm') {
                     sh """
@@ -54,6 +84,12 @@ pipeline {
         }
 
         stage('ECR Login') {
+            when {
+                anyOf {
+                    environment name: 'BACKEND_CHANGED', value: 'true'
+                    environment name: 'FRONTEND_CHANGED', value: 'true'
+                }
+            }
             steps {
                 sh '''
                     aws ecr get-login-password --region $AWS_REGION | \
@@ -67,6 +103,7 @@ pipeline {
         // ===========================
 
         stage('Backend: Build Image') {
+            when { environment name: 'BACKEND_CHANGED', value: 'true' }
             steps {
                 dir('aws_3tier_architecture/application-code/app-tier') {
                     sh '''
@@ -77,6 +114,7 @@ pipeline {
         }
 
         stage('Backend: Trivy Scan') {
+            when { environment name: 'BACKEND_CHANGED', value: 'true' }
             steps {
                 sh '''
                     export TRIVY_CACHE_DIR=/var/lib/jenkins/trivy-cache
@@ -92,6 +130,7 @@ pipeline {
         }
 
         stage('Backend: Push & Deploy') {
+            when { environment name: 'BACKEND_CHANGED', value: 'true' }
             steps {
 
                 sh """
@@ -122,6 +161,7 @@ pipeline {
         // ===========================
 
         stage('Frontend: Build Image') {
+            when { environment name: 'FRONTEND_CHANGED', value: 'true' }
             steps {
                 dir('aws_3tier_architecture/application-code/web-tier') {
                     sh '''
@@ -132,6 +172,7 @@ pipeline {
         }
 
         stage('Frontend: Trivy Scan') {
+            when { environment name: 'FRONTEND_CHANGED', value: 'true' }
             steps {
                 sh '''
                     export TRIVY_CACHE_DIR=/var/lib/jenkins/trivy-cache
@@ -147,6 +188,7 @@ pipeline {
         }
 
         stage('Frontend: Push & Deploy') {
+            when { environment name: 'FRONTEND_CHANGED', value: 'true' }
             steps {
 
                 sh """
@@ -172,6 +214,13 @@ pipeline {
         }
 
         stage('Verify Deployment') {
+            when {
+                anyOf {
+                    environment name: 'BACKEND_CHANGED', value: 'true'
+                    environment name: 'FRONTEND_CHANGED', value: 'true'
+                    environment name: 'MYSQL_CHANGED', value: 'true'
+                }
+            }
             steps {
                 sh '''
                     echo "========== MySQL Pod =========="
