@@ -13,10 +13,10 @@ pipeline {
             steps {
                 checkout scm
                 script {
-                    env.IMAGE_TAG = sh(
-                        script: 'git rev-parse --short HEAD',
-                        returnStdout: true
-                    ).trim()
+                    env.IMAGE_TAG = "v1.0.${env.BUILD_NUMBER}"
+                    
+                    echo "Image Tag = ${env.IMAGE_TAG}"          
+                    
                 }
             }
         }
