@@ -14,9 +14,7 @@ pipeline {
                 checkout scm
                 script {
                     env.IMAGE_TAG = "v1.0.${env.BUILD_NUMBER}"
-                    
-                    echo "Image Tag = ${env.IMAGE_TAG}"          
-                    
+                    echo "Image Tag = ${env.IMAGE_TAG}"
                 }
             }
         }
@@ -58,7 +56,6 @@ pipeline {
         stage('Health check — force redeploy if broken') {
             steps {
                 script {
-                    // MySQL — check StatefulSet ready replicas
                     def mysqlReady = sh(
                         script: "kubectl get statefulset mysql -n database -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0",
                         returnStdout: true
@@ -68,7 +65,6 @@ pipeline {
                         env.MYSQL_CHANGED = 'true'
                     }
 
-                    // Backend — check Deployment ready replicas
                     def backendReady = sh(
                         script: "kubectl get deployment backend -n backend -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0",
                         returnStdout: true
@@ -78,7 +74,6 @@ pipeline {
                         env.BACKEND_CHANGED = 'true'
                     }
 
-                    // Frontend — check Deployment ready replicas
                     def frontendReady = sh(
                         script: "kubectl get deployment frontend -n frontend -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0",
                         returnStdout: true
@@ -100,17 +95,19 @@ pipeline {
         stage('MySQL: Deploy') {
             when { environment name: 'MYSQL_CHANGED', value: 'true' }
             steps {
-                dir('Helm') {
-                    sh """
-                        helm upgrade --install mysql ./mysql \
-                            -n database \
-                            --create-namespace \
-                            -f /var/lib/jenkins/secrets/mysql-secrets.values.yaml
+                withCredentials([file(credentialsId: 'mysql-secrets-yaml', variable: 'MYSQL_SECRETS_FILE')]) {
+                    dir('Helm') {
+                        sh """
+                            helm upgrade --install mysql ./mysql \
+                                -n database \
+                                --create-namespace \
+                                -f \$MYSQL_SECRETS_FILE
 
-                        kubectl rollout status statefulset/mysql \
-                            -n database \
-                            --timeout=120s
-                    """
+                            kubectl rollout status statefulset/mysql \
+                                -n database \
+                                --timeout=120s
+                        """
+                    }
                 }
             }
         }
@@ -173,18 +170,20 @@ pipeline {
                     $ECR_REGISTRY/three-tier-poc-backend:$IMAGE_TAG
                 """
 
-                dir('Helm') {
-                    sh """
-                        helm upgrade --install backend ./backend \
-                            -n backend \
-                            --create-namespace \
-                            -f /var/lib/jenkins/secrets/backend-secrets.values.yaml \
-                            --set image.tag=$IMAGE_TAG
+                withCredentials([file(credentialsId: 'backend-secrets-yaml', variable: 'BACKEND_SECRETS_FILE')]) {
+                    dir('Helm') {
+                        sh """
+                            helm upgrade --install backend ./backend \
+                                -n backend \
+                                --create-namespace \
+                                -f \$BACKEND_SECRETS_FILE \
+                                --set image.tag=$IMAGE_TAG
 
-                        kubectl rollout status deployment/backend \
-                            -n backend \
-                            --timeout=90s
-                    """
+                            kubectl rollout status deployment/backend \
+                                -n backend \
+                                --timeout=90s
+                        """
+                    }
                 }
             }
         }
