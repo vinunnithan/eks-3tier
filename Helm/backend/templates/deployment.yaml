@@ -39,6 +39,9 @@ spec:
                   name: backend-db-secret
                   key: DB_PWD
 
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
           readinessProbe:
             httpGet:
               path: /health
